@@ -210,6 +210,84 @@ def transcribe_audio_uaz(message_id: str) -> Optional[str]:
         logger.error(f"Erro transcrição Gemini: {e}")
         return None
 
+def analyze_image_uaz(message_id: Optional[str], url: Optional[str]) -> Optional[str]:
+    if not settings.google_api_key:
+        return None
+
+    file_path = None
+    try:
+        from google import genai
+        import tempfile
+        import os as os_module
+        import base64
+
+        mime_type_clean = None
+        image_bytes = None
+
+        if message_id:
+            media_data = whatsapp.get_media_base64(message_id)
+            if media_data and media_data.get("base64"):
+                image_bytes = base64.b64decode(media_data["base64"])
+                mime_type_clean = (media_data.get("mimetype") or "image/jpeg").split(";")[0].strip()
+
+        if image_bytes is None and url:
+            resp = requests.get(url, timeout=20)
+            resp.raise_for_status()
+            image_bytes = resp.content
+            mime_type_clean = (resp.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+
+        if not image_bytes:
+            return None
+
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+        }
+        ext = ext_map.get((mime_type_clean or "").lower(), ".jpg")
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(image_bytes)
+            file_path = tmp.name
+
+        client = genai.Client(api_key=settings.google_api_key)
+        image_file = client.files.upload(file=file_path, config={"mime_type": mime_type_clean or "image/jpeg"})
+
+        prompt = (
+            "Analise cuidadosamente esta imagem e identifique o produto (se for um produto). "
+            "Retorne um texto curto em português com: nome do produto, marca, versão/sabor/variante, "
+            "tamanho/peso/volume e qualquer detalhe útil visível. "
+            "Se não for um produto (ex.: foto borrada, pessoa, conversa), diga apenas: 'Imagem não identificada'. "
+            "Não invente detalhes; só use o que estiver visível."
+        )
+
+        model_candidates = [settings.llm_model or "gemini-2.0-flash-lite", "gemini-2.0-flash"]
+        last_err = None
+        for model in model_candidates:
+            try:
+                response = client.models.generate_content(model=model, contents=[prompt, image_file])
+                txt = (response.text or "").strip()
+                if txt:
+                    return txt[:800]
+            except Exception as e:
+                last_err = e
+
+        if last_err:
+            logger.error(f"Erro visão Gemini: {last_err}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Erro ao analisar imagem: {e}")
+        return None
+    finally:
+        if file_path:
+            try:
+                import os as os_module
+                os_module.unlink(file_path)
+            except Exception:
+                pass
+
 def _extract_incoming(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normaliza e processa (Texto, Áudio, Imagem, Documento/PDF).
@@ -381,10 +459,14 @@ def _extract_incoming(payload: Dict[str, Any]) -> Dict[str, Any]:
     elif message_type == "image":
         caption = mensagem_texto or ""
         url = media_url or get_media_url_uaz(message_id)
-        if url: 
-            mensagem_texto = f"{caption} [MEDIA_URL: {url}]".strip()
-        else: 
-            mensagem_texto = f"{caption} [Imagem recebida]".strip()
+        analysis = analyze_image_uaz(message_id, url)
+        if analysis:
+            base = caption.strip()
+            mensagem_texto = f"{base}\n[Análise da imagem]: {analysis}".strip() if base else f"[Análise da imagem]: {analysis}"
+        else:
+            mensagem_texto = caption.strip() if caption else "[Imagem recebida]"
+        if url:
+            mensagem_texto = f"{mensagem_texto} [MEDIA_URL: {url}]".strip()
 
     elif message_type == "document":
         url = media_url or get_media_url_uaz(message_id)
