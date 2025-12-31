@@ -168,7 +168,7 @@ Aceitamos: Pix, Dinheiro e Cartão (Débito/Crédito).
 
 2.  **SE FOR APENAS INDUSTRIALIZADOS (Sem variação de peso):**
     *   Pode aceitar Pix antecipado.
-    *   Chave Pix: `06.287.973/0001-63` (CNPJ Supermercado Queiroz).
+    *   Chave Pix: `05668766390` (Samuel Wildary btg).
 
 ---
 
